@@ -1,0 +1,133 @@
+#Twitter Scraping set-up
+
+install.packages("twitteR")
+install.packages("tidyverse")
+library("twitteR")
+library("tidyverse")
+
+consumer_key <- "XXX"
+consumer_secret <-"XXX"
+access_token <- "XXX"
+access_secret <- "XXX" 
+
+#Scrape Trump & China twitter data
+
+setup_twitter_oauth(consumer_key, consumer_secret, access_token, access_secret)
+tw = searchTwitter('Trump+China', n = 10000)
+d = twListToDF(tw)
+d
+
+#Scrape data before and after certain date
+
+TrumpBefore <- searchTwitter('Trump+China', n=5000, lang=NULL, since='2019-05-06', until='2019-05-07', locale=NULL, geocode=NULL, sinceID=NULL, maxID=NULL, resultType=NULL, retryOnRateLimit=120)
+TrumpAfter <- searchTwitter('Trump+China', n=5000, lang=NULL, since='2019-05-13', until='2019-05-14', locale=NULL, geocode=NULL, sinceID=NULL, maxID=NULL, resultType=NULL, retryOnRateLimit=120)
+TrumpBeforeDF <- twListToDF(TrumpBefore)
+TrumpAfterDF <- twListToDF(TrumpAfter)
+
+TrumpAfterDF_S <- TrumpAfterDF %>% select(text, created, retweetCount)
+TrumpAfterDF_S1 <- subset(TrumpAfterDF_S, retweetCount %in% 0)
+TrumpAfterDF_S1
+
+#Cleaning process of the text
+
+TrumpAfterDF_S1$textclean <- gsub(pattern="\\W", replace=" ", TrumpAfterDF_S1$text) # find punctuation and spaces (using the short-hand code \\W) and replace with a space
+TrumpAfterDF_S1$textclean <- gsub(pattern="\\d", replace=" ", TrumpAfterDF_S1$textclean) # find numbers (d = digits) and replace with a blank
+TrumpAfterDF_S1$textclean <- tolower(TrumpAfterDF_S1$textclean)
+
+#Remove uninteresting words (that, and, or, etc) called stopwords
+#pull up the tm map library neccesary for the removeWords function
+install.packages("tm")
+library("tm")
+TrumpAfterDF_S1$textclean <- removeWords(TrumpAfterDF_S1$textclean, stopwords("english")) # remove non useful word (specify the language)
+TrumpAfterDF_S1$textclean <- gsub(pattern="\\b[A-z]\\b{1}", replace="", TrumpAfterDF_S1$textclean) # Get rid of orphan letters. \\b[A-z] means 'a word beginnig with any letter from A-z'
+TrumpAfterDF_S1$textclean <- stripWhitespace(TrumpAfterDF_S1$textclean) # Clean up extra whitespace caused by the cleaning process
+
+TrumpAfterDF_S1_co <- Corpus(VectorSource(TrumpAfterDF_S1$textclean))
+dtm_TrumpAfterDF_S1 <- TermDocumentMatrix(TrumpAfterDF_S1_co)
+a <- as.matrix(findFreqTerms(dtm_TrumpAfterDF_S1, lowfreq = 30))
+a
+
+TrumpAfterDF_S1_co <- tm_map(TrumpAfterDF_S1_co, removeWords, c("https", "realdonaldtrump", "will", "get", "can", "says"))
+
+write.csv(TrumpBefore_DF[,c("created","SentimentScore")], 'Trump_before_sentiment.csv')
+
+library('ggplot2')
+library('gridExtra')
+
+plot.hierarchical.cluster<-function(TrumpAfterDF_S1_co,sparsity=0.95, from=NA,to=NA,stemType = "prevalent",...)
+  
+  ###### N gram ######
+
+install.packages("ngram")
+library("ngram")
+
+#Alter the corpus into a vector for the ngram function to run
+TrumpAfterDF_S1_v <- concatenate(lapply(TrumpAfterDF_S1_co , "[", 1))
+
+#run ngram function for 2-3-4-5 words and check their frequencies
+
+TrumpAfterDF_S1_v4 <- ngram(TrumpAfterDF_S1_v, n=4)
+m <- get.phrasetable(TrumpAfterDF_S1_v4)
+m3 <- head(m, 15)
+m3
+
+###### Sentiment ######
+
+install.packages("stringr")
+library(stringr)
+
+# Load lexicons of positive and negtive words
+TrumpAfterDF_S1$textclean <- str_split(TrumpAfterDF_S1$textclean, pattern = "\\s+") # Split a string into its individual words. The regex indicates 'one or more spaces'
+poswords <- scan('pos.txt', what="character")
+negwords <- scan("neg.txt", what="character")
+
+# Match words from our text with the positive words
+TrumpAfterDF_S1$TextPosMatches <- lapply(TrumpAfterDF_S1$textclean, function(x) match(x, poswords))
+TrumpAfterDF_S1$TextPosMatchesCount <- lapply(TrumpAfterDF_S1$TextPosMatches, function(x) sum(!is.na(x)))
+
+# Match words from our text with the negative words
+TrumpAfterDF_S1$TextNegMatches <- lapply(TrumpAfterDF_S1$textclean, function(x) match(x, negwords))
+TrumpAfterDF_S1$TextNegMatchesCount <- lapply(TrumpAfterDF_S1$TextNegMatches, function(x) sum(!is.na(x)))
+
+# Calculate a sentiment score + the mean
+TrumpAfterDF_S1$SentimentScore <- unlist(TrumpAfterDF_S1$TextPosMatchesCount)-unlist(TrumpAfterDF_S1$TextNegMatchesCount)
+
+avg <- mean(TrumpAfterDF_S1$SentimentScore)
+avg
+
+plot(SentimentScore~created, TrumpAfterDF_S1, type = "l")
+abline(a = NULL, b = NULL, h=avg, col="blue")
+
+write.csv(TrumpAfterDF_S1[,c("created","SentimentScore")], 'Trump_after_sentiment.csv')
+
+####### creation of network of terms ##############
+
+
+tdm2 <- as.matrix(tdm_TrumpAfterDF_S1)
+
+dtm_TrumpAfterDF_S1
+dtm2 <- as.matrix(dtm_TrumpAfterDF_S1)
+
+
+# change it to a Boolean matrix
+tdm2[tdm2>=1] <- 1
+# transform into a term-term adjacency matrix
+trumpmatrix <- tdm2 %*% t(tdm2)
+
+install.packages("igraphy")
+library(igraph)
+# build a graph from the above matrix
+g <- graph.adjacency(trumpmatrix, weighted=T, mode="undirected")
+# remove loops
+g <- simplify(g)
+# set labels and degrees of vertices
+V(g)$label <- V(g)$name
+V(g)$degree <- degree(g)
+
+
+# set seed to make the layout reproducible
+set.seed(3952)
+layout1 <- layout.fruchterman.reingold(g)
+plot(g, layout=layout1)
+
+
